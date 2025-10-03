@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Parts Logger</title>
+  <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
+  <style>
+    body { font-family: sans-serif; max-width: 500px; margin: auto; padding: 20px; }
+    h1 { text-align: center; }
+    input, select, button { width: 100%; padding: 10px; margin: 8px 0; font-size: 16px; }
+    #reader { width: 100%; margin: 10px auto; }
+    .log { background: #f0f0f0; padding: 10px; margin-top: 10px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Parts Logger</h1>
+  
+  <!-- Camera Scanner -->
+  <div id="reader"></div>
+
+  <!-- Manual form -->
+  <form id="logForm">
+    <label>Part ID:</label>
+    <input type="text" id="partId" required>
+
+    <label>User:</label>
+    <input type="text" id="user" placeholder="Your name" required>
+
+    <label>Action:</label>
+    <select id="action">
+      <option value="Issue">Issue</option>
+      <option value="Return">Return</option>
+      <option value="Discard">Discard</option>
+    </select>
+
+    <button type="submit">Log Action</button>
+  </form>
+
+  <div class="log" id="status"></div>
+
+  <script>
+    // Start scanner
+    function onScanSuccess(decodedText) {
+      document.getElementById("partId").value = decodedText;
+    }
+
+    let html5QrCode = new Html5Qrcode("reader");
+    Html5Qrcode.getCameras().then(cameras => {
+      if (cameras.length) {
+        html5QrCode.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: 250 },
+          onScanSuccess
+        );
+      }
+    });
+
+    // Handle form submit
+    document.getElementById("logForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+
+      const entry = {
+        partId: document.getElementById("partId").value,
+        user: document.getElementById("user").value,
+        action: document.getElementById("action").value,
+        timestamp: new Date().toISOString()
+      };
+
+      // Send to Zoho Sheet API
+      try {
+        const response = await fetch("ZOHO_API_URL", {
+          method: "POST",
+          headers: {
+            "Authorization": "Zoho-oauthtoken AUTH_TOKEN",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            data: [entry]   // Zoho API expects an array of rows
+          })
+        });
+
+        if (response.ok) {
+          document.getElementById("status").innerText = "✅ Logged: " + JSON.stringify(entry);
+          document.getElementById("logForm").reset();
+        } else {
+          document.getElementById("status").innerText = "❌ Error logging to Zoho. " + (await response.text());
+        }
+      } catch (err) {
+        document.getElementById("status").innerText = "⚠️ Network error: " + err;
+      }
+    });
+  </script>
+</body>
+</html>
