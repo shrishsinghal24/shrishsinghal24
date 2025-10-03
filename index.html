@@ -1,94 +1,185 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
   <title>Parts Logger</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script src="https://unpkg.com/html5-qrcode/minified/html5-qrcode.min.js"></script>
   <style>
-    body { font-family: sans-serif; max-width: 500px; margin: auto; padding: 20px; }
-    h1 { text-align: center; }
-    input, select, button { width: 100%; padding: 10px; margin: 8px 0; font-size: 16px; }
-    #reader { width: 100%; margin: 10px auto; }
-    .log { background: #f0f0f0; padding: 10px; margin-top: 10px; font-size: 14px; }
+    body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; max-width:640px; margin:24px auto; padding:16px; }
+    h1 { text-align:center; margin-bottom:16px; }
+    label { display:block; margin-top:12px; font-weight:600; }
+    input, select, button { width:100%; padding:10px; font-size:15px; margin-top:6px; box-sizing:border-box; }
+    #reader { width:100%; margin-top:10px; border:1px solid #eee; border-radius:6px; padding:8px; }
+    .row { display:flex; gap:8px; }
+    .small { flex:1; }
+    #status { margin-top:12px; padding:10px; border-radius:6px; background:#f7f7f8; min-height:40px; }
+    .hint { font-size:13px; color:#666; margin-top:6px; }
   </style>
 </head>
 <body>
   <h1>Parts Logger</h1>
-  
-  <!-- Camera Scanner -->
-  <div id="reader"></div>
 
-  <!-- Manual form -->
-  <form id="logForm">
-    <label>Part ID:</label>
-    <input type="text" id="partId" required>
+  <label>User</label>
+  <select id="userSelect">
+    <!-- Replace these options with your actual 5-10 names -->
+    <option value="Shrish">Shrish</option>
+    <option value="Alice">Alice</option>
+    <option value="Bob">Bob</option>
+    <option value="Charlie">Charlie</option>
+  </select>
 
-    <label>User:</label>
-    <input type="text" id="user" placeholder="Your name" required>
+  <label>Action</label>
+  <select id="actionSelect">
+    <option>Issue</option>
+    <option>Return</option>
+    <option>Discard</option>
+  </select>
 
-    <label>Action:</label>
-    <select id="action">
-      <option value="Issue">Issue</option>
-      <option value="Return">Return</option>
-      <option value="Discard">Discard</option>
-    </select>
+  <label>Part ID (scan or type)</label>
+  <div class="row">
+    <input id="partId" placeholder="Scan barcode or type Part ID (eg. P001)" />
+    <button id="startScan" type="button" style="width:120px">Start Scan</button>
+  </div>
 
-    <button type="submit">Log Action</button>
-  </form>
+  <div id="reader" style="display:none"></div>
 
-  <div class="log" id="status"></div>
+  <div style="margin-top:12px">
+    <button id="submitBtn">Log Action</button>
+  </div>
+
+  <div class="hint">If you use a USB/Bluetooth barcode scanner it will type the code directly into the Part ID box. No camera required.</div>
+
+  <div id="status"></div>
 
   <script>
-    // Start scanner
-    function onScanSuccess(decodedText) {
-      document.getElementById("partId").value = decodedText;
+    // CONFIG: set your worker URL here (example: https://parts-logger.example.workers.dev)
+    const WORKER_ENDPOINT = "https://YOUR_WORKER_SUBDOMAIN.workers.dev/log";
+
+    const statusEl = document.getElementById('status');
+    const partEl = document.getElementById('partId');
+    const userEl = document.getElementById('userSelect');
+    const actionEl = document.getElementById('actionSelect');
+    const startScanBtn = document.getElementById('startScan');
+    const readerDiv = document.getElementById('reader');
+
+    function setStatus(txt, isError=false) {
+      statusEl.innerText = txt;
+      statusEl.style.color = isError ? 'crimson' : 'inherit';
     }
 
-    let html5QrCode = new Html5Qrcode("reader");
-    Html5Qrcode.getCameras().then(cameras => {
-      if (cameras.length) {
-        html5QrCode.start(
-          { facingMode: "environment" },
-          { fps: 10, qrbox: 250 },
-          onScanSuccess
-        );
+    // Scanner
+    let html5QrCode = null;
+    startScanBtn.addEventListener('click', async () => {
+      if (readerDiv.style.display === 'none') {
+        readerDiv.style.display = 'block';
+        startScanBtn.innerText = 'Stop Scan';
+        if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+
+        try {
+          const cameras = await Html5Qrcode.getCameras();
+          const cam = cameras.length ? cameras[0].id : null;
+          await html5QrCode.start(
+            cam ?? { facingMode: "environment" },
+            { fps: 10, qrbox: 250 },
+            (decodedText, decodedResult) => {
+              partEl.value = decodedText;
+              // optionally auto-submit:
+              // document.getElementById('submitBtn').click();
+              setStatus("Scanned: " + decodedText);
+            });
+        } catch (e) {
+          setStatus("Camera scan error: " + e, true);
+        }
+      } else {
+        startScanBtn.innerText = 'Start Scan';
+        readerDiv.style.display = 'none';
+        if (html5QrCode) {
+          try { await html5QrCode.stop(); } catch(e){/*ignore*/ }
+        }
       }
     });
 
-    // Handle form submit
-    document.getElementById("logForm").addEventListener("submit", async function(e) {
-      e.preventDefault();
+    // Submit
+    document.getElementById('submitBtn').addEventListener('click', async () => {
+      const partId = partEl.value.trim();
+      const user = userEl.value;
+      const action = actionEl.value;
+      if (!partId) return setStatus("Please enter or scan a Part ID.", true);
 
-      const entry = {
-        partId: document.getElementById("partId").value,
-        user: document.getElementById("user").value,
-        action: document.getElementById("action").value,
-        timestamp: new Date().toISOString()
+      const payload = {
+        PartID: partId,
+        User: user,
+        Action: action,
+        Timestamp: new Date().toISOString()
       };
 
-      // Send to Zoho Sheet API
+      setStatus("Sending...");
       try {
-        const response = await fetch("ZOHO_API_URL", {
-          method: "POST",
-          headers: {
-            "Authorization": "Zoho-oauthtoken AUTH_TOKEN",
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            data: [entry]   // Zoho API expects an array of rows
-          })
+        const r = await fetch(WORKER_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
 
-        if (response.ok) {
-          document.getElementById("status").innerText = "✅ Logged: " + JSON.stringify(entry);
-          document.getElementById("logForm").reset();
-        } else {
-          document.getElementById("status").innerText = "❌ Error logging to Zoho. " + (await response.text());
+        if (!r.ok) {
+          // try to show server message
+          const t = await r.text();
+          setStatus("Server error: " + r.status + " — " + t, true);
+          // also store locally as fallback
+          pushLocal(payload);
+          return;
         }
+
+        const data = await r.json().catch(()=>null);
+        setStatus("✅ Logged: " + JSON.stringify(payload));
+        partEl.value = '';
       } catch (err) {
-        document.getElementById("status").innerText = "⚠️ Network error: " + err;
+        setStatus("Network error. Saved locally. " + err, true);
+        pushLocal(payload);
       }
     });
+
+    // LOCAL FALLBACK: store unsent logs in localStorage and allow CSV export
+    function pushLocal(entry) {
+      const key = 'parts_logger_offline';
+      const arr = JSON.parse(localStorage.getItem(key) || '[]');
+      arr.push(entry);
+      localStorage.setItem(key, JSON.stringify(arr));
+      setStatus("Saved offline. Go to Export to upload later.");
+    }
+
+    // Add a small Export link/UI
+    const exportBtn = document.createElement('button');
+    exportBtn.innerText = 'Export Offline CSV';
+    exportBtn.style.marginTop = '12px';
+    exportBtn.onclick = () => {
+      const key = 'parts_logger_offline';
+      const arr = JSON.parse(localStorage.getItem(key) || '[]');
+      if (!arr.length) return setStatus("No offline logs to export.");
+      const csv = toCSV(arr);
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'parts_logs_offline.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      localStorage.removeItem(key);
+      setStatus("Exported CSV and cleared offline queue.");
+    };
+    document.body.appendChild(exportBtn);
+
+    function toCSV(arr) {
+      const keys = ["PartID","User","Action","Timestamp"];
+      let out = keys.join(',') + '\n';
+      for (const r of arr) {
+        out += keys.map(k => `"${String(r[k] || '').replace(/"/g,'""')}"`).join(',') + '\n';
+      }
+      return out;
+    }
   </script>
 </body>
 </html>
